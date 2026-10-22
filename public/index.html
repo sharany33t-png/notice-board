@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Campus Digital Notice Board</title>
+<style>
+:root{--bg:#f5f6fa;--card:#fff;--ink:#1a1d29;--mute:#667;--line:#e3e5ee;--pri:#3b5bdb;--priInk:#fff;--red:#d6336c;--ok:#2b8a3e;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12141c;--card:#1c1f2b;--ink:#eceef6;--mute:#9aa0b8;--line:#2c3042;--pri:#748ffc;--priInk:#10131f;--red:#f06595;--ok:#69db7c;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#12141c;--card:#1c1f2b;--ink:#eceef6;--mute:#9aa0b8;--line:#2c3042;--pri:#748ffc;--priInk:#10131f;--red:#f06595;--ok:#69db7c;color-scheme:dark}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:env(safe-area-inset-top,0px);z-index:5}
+h1{font-size:18px;margin:0}nav{display:flex;gap:6px}
+button,input,select,textarea{font:inherit;color:inherit}
+nav button,.btn{border:1px solid var(--line);background:var(--card);padding:8px 14px;border-radius:10px;cursor:pointer}
+nav button.on,.btn.pri{background:var(--pri);color:var(--priInk);border-color:var(--pri)}
+.btn.red{color:var(--red)}.btn.sm{padding:4px 10px;font-size:14px}
+main{max-width:960px;margin:0 auto;padding:16px}
+.banner{background:var(--red);color:#fff;padding:8px 0;overflow:hidden;white-space:nowrap}
+.banner span{display:inline-block;padding-left:100%;animation:scr 22s linear infinite;font-weight:600}
+@keyframes scr{to{transform:translateX(-100%)}}
+.stage{background:var(--card);border:1px solid var(--line);border-radius:18px;min-height:56vh;padding:clamp(20px,4vw,48px);display:flex;flex-direction:column;justify-content:center;gap:14px}
+.stage h2{font-size:clamp(26px,5vw,52px);line-height:1.15;margin:0}
+.stage p{font-size:clamp(17px,2.4vw,26px);margin:0;white-space:pre-wrap}
+.chip{display:inline-block;font-size:13px;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--pri);color:var(--priInk);align-self:flex-start}
+.chip.urgent{background:var(--red);color:#fff}
+.meta{color:var(--mute);font-size:14px}
+.dots{display:flex;gap:6px;justify-content:center;margin-top:12px}
+.dots i{width:9px;height:9px;border-radius:50%;background:var(--line)}.dots i.on{background:var(--pri)}
+.bar{display:flex;justify-content:space-between;align-items:center;margin:10px 0;color:var(--mute)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:10px}
+.card h3{margin:6px 0 4px;font-size:18px}.card p{margin:0;white-space:pre-wrap}
+.row{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+.row input,.row select{flex:1;min-width:140px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card)}
+form{display:grid;gap:10px;margin-bottom:20px}
+form input,form select,form textarea{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--card);width:100%}
+form .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.note{padding:10px 14px;border-radius:10px;background:var(--card);border:1px dashed var(--line);color:var(--mute);margin-bottom:12px;font-size:14px}
+.empty{text-align:center;color:var(--mute);padding:40px 0}
+.tools{display:flex;gap:6px;margin-top:8px}
+body.kiosk header,body.kiosk .bar{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>📌 Campus Notice Board</h1>
+  <nav id="nav"></nav>
+</header>
+<div id="banner"></div>
+<main id="app"></main>
+
+<script>
+(function(){
+function tok(){return window._tok||(function(){try{return sessionStorage.getItem("nb-token")||""}catch(e){return ""}})()}
+function hdr(){return{"Content-Type":"application/json","x-token":tok()}}
+function chk(r){if(r.status===401){try{sessionStorage.setItem("nb-admin","0")}catch(e){}window._ok=false;alert("Session expired. Please log in again.");location.hash="admin";location.reload();throw 0}if(!r.ok)throw new Error("fail");return r}
+var DB={
+ collection:function(){return{
+  onSnapshot:function(next,err){
+   function load(){fetch("/api/notices").then(function(r){return r.json()}).then(function(l){next({docs:l.map(function(n){return{id:n.id,data:function(){return n}}})})}).catch(function(){})}
+   load();try{var es=new EventSource("/api/stream");es.onmessage=load}catch(e){setInterval(load,10000)}setInterval(load,60000)},
+  doc:function(id){return{
+   set:function(d){return fetch("/api/notices/"+encodeURIComponent(id),{method:"PUT",headers:hdr(),body:JSON.stringify(d)}).then(chk)},
+   delete:function(){return fetch("/api/notices/"+encodeURIComponent(id),{method:"DELETE",headers:hdr()}).then(chk)}}}}},
+ doc:function(){return{onSnapshot:function(next){next({exists:true,data:function(){return{hash:"server"}}})},set:function(){return Promise.resolve()}}}
+};
+window.claude={use:function(n){
+ if(n==="db")return Promise.resolve(DB);
+ if(n==="user")return Promise.resolve({can:function(){return true}});
+ if(n==="downloads")return Promise.resolve({save:function(o){var a=document.createElement("a");a.href=URL.createObjectURL(o.data);a.download=o.filename;document.body.appendChild(a);a.click();a.remove();return Promise.resolve()}});
+ return Promise.resolve(null)}};
+})();
+</script>
+<script>
+(function(){
+var CATS=["General","Civil","Mech","Mett","Exams","Events","Placements","Sports","Holidays"];
+var LSK="notice-board-demo-v1";
+var notices=[],view=(location.hash||"#board").slice(1),idx=0,db=null,canWrite=true,filter={q:"",cat:"All"},editing=null,usingDb=false,adminCfg=null,cfgReady=false,pendingFile=null;
+
+function el(t,a,k){var e=document.createElement(t);a=a||{};for(var x in a){if(x==="class")e.className=a[x];else if(x==="onclick")e.onclick=a[x];else e.setAttribute(x,a[x]);}(k||[]).forEach(function(c){e.appendChild(typeof c==="string"?document.createTextNode(c):c)});return e}
+function today(){var d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
+function active(n){return !n.expires||n.expires>=today()}
+function sorted(list){return list.slice().sort(function(a,b){return (b.priority==="urgent")-(a.priority==="urgent")||b.created-a.created})}
+function fmt(ts){return new Date(ts).toLocaleDateString(undefined,{day:"numeric",month:"short",year:"numeric"})}
+function uid(){return "n"+Date.now().toString(36)+Math.random().toString(36).slice(2,6)}
+
+/* ---------- storage ---------- */
+function lsLoad(){try{notices=JSON.parse(localStorage.getItem(LSK)||"[]")}catch(e){notices=[]}}
+function lsSave(){try{localStorage.setItem(LSK,JSON.stringify(notices))}catch(e){}}
+function saveNotice(n){
+  if(usingDb){return db.collection("notices").doc(n.id).set(n).catch(function(){alert("Could not save. You may not have permission to edit.")})}
+  var i=notices.findIndex(function(x){return x.id===n.id});if(i>=0)notices[i]=n;else notices.push(n);lsSave();render();return Promise.resolve();
+}
+function removeNotice(id){
+  if(!confirm("Delete this notice?"))return;
+  if(usingDb){db.collection("notices").doc(id).delete().catch(function(){alert("Could not delete.")});return}
+  notices=notices.filter(function(x){return x.id!==id});lsSave();render();
+}
+function seed(){
+  var now=Date.now(),s=[
+   ["Mid-semester exams timetable released","Exams","normal","Timetable is on the department boards and the student portal. Report 15 minutes before each exam with your ID card."],
+   ["Annual Tech Fest registrations open","Events","normal","Hackathon, robotics, and coding contests. Register at the student council desk before the last date."],
+   ["Campus placement drive: Monday 10 AM","Placements","urgent","Final-year students must carry two copies of their resume. Formal dress code is mandatory."],
+   ["Library closed on Saturday","General","normal","The library will be closed for stock verification. It reopens on Monday."]];
+  s.forEach(function(x,i){saveNotice({id:uid(),title:x[0],category:x[1],priority:x[2],body:x[3],expires:"",created:now-i*3600000,author:"Admin"})});
+}
+
+/* ---------- views ---------- */
+function setNav(){
+  var nav=document.getElementById("nav");nav.textContent="";
+  [["board","Board"],["notices","Notices"],["admin","Admin"]].forEach(function(p){
+    nav.appendChild(el("button",{class:view===p[0]?"on":"",onclick:function(){go(p[0])}},[p[1]]))});
+}
+function go(v){view=v;location.hash=v;idx=0;document.body.classList.remove("kiosk");render()}
+
+function banner(){
+  var b=document.getElementById("banner");b.textContent="";
+  var u=notices.filter(function(n){return active(n)&&n.priority==="urgent"});
+  if(!u.length)return;
+  b.appendChild(el("div",{class:"banner"},[el("span",{},["🚨 "+u.map(function(n){return n.title}).join("   •   ")])]));
+}
+
+function board(app){
+  var list=sorted(notices.filter(active));
+  var bar=el("div",{class:"bar"},[el("span",{id:"clock"},[""]),el("button",{class:"btn sm",onclick:function(){
+    document.body.classList.toggle("kiosk");try{if(document.body.classList.contains("kiosk"))document.documentElement.requestFullscreen()}catch(e){}}},["Kiosk mode"])]);
+  app.appendChild(bar);
+  if(!list.length){app.appendChild(el("div",{class:"stage"},[el("h2",{},["No active notices"]),el("p",{},["New announcements will appear here instantly."])]));return}
+  if(idx>=list.length)idx=0;var n=list[idx];
+  var st=el("div",{class:"stage"},[
+    el("span",{class:"chip"+(n.priority==="urgent"?" urgent":"")},[(n.priority==="urgent"?"URGENT · ":"")+n.category]),
+    el("h2",{},[n.title]),el("p",{},[n.body||""]),attach(n),
+    el("div",{class:"meta"},["Posted "+fmt(n.created)+(n.expires?" · Valid until "+n.expires:"")])]);
+  app.appendChild(st);
+  var d=el("div",{class:"dots"});list.forEach(function(_,i){d.appendChild(el("i",{class:i===idx?"on":""}))});app.appendChild(d);
+  tick();
+}
+function tick(){var c=document.getElementById("clock");if(c)c.textContent=new Date().toLocaleString(undefined,{weekday:"long",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
+
+function attach(n){var a=n.att;if(!a)return "";
+  if(a.type.indexOf("image/")===0)return el("img",{src:a.data,alt:a.name,style:"max-width:100%;max-height:40vh;border-radius:12px;object-fit:contain;align-self:flex-start;margin:8px 0"});
+  return el("button",{class:"btn sm",style:"align-self:flex-start;margin:8px 0",onclick:function(){saveFile(a)}},["📎 "+a.name+" (download)"])}
+function saveFile(a){try{var s=atob(a.data.split(",")[1]),u=new Uint8Array(s.length);for(var i=0;i<s.length;i++)u[i]=s.charCodeAt(i);var blob=new Blob([u],{type:a.type});
+  window.claude.use("downloads").then(function(d){if(d)d.save({filename:a.name,data:blob}).catch(function(){});else alert("Download isn’t available in this view.")})}catch(e){alert("Could not open the file.")}}
+function readFile(f){return new Promise(function(ok,no){var r=new FileReader();r.onerror=function(){no("Could not read the file.")};
+  r.onload=function(){var d=r.result;
+   if(f.type.indexOf("image/")===0){var im=new Image();im.onerror=function(){no("Unsupported image.")};
+    im.onload=function(){var s=Math.min(1,1000/Math.max(im.width,im.height)),c=document.createElement("canvas");c.width=Math.round(im.width*s);c.height=Math.round(im.height*s);c.getContext("2d").drawImage(im,0,0,c.width,c.height);
+     var q=0.75,u=c.toDataURL("image/jpeg",q);while(u.length>190000&&q>0.3){q-=0.1;u=c.toDataURL("image/jpeg",q)}
+     if(u.length>190000)no("Image is too large even after shrinking. Try a smaller one.");else ok({name:f.name.replace(/\.[^.]+$/,"")+".jpg",type:"image/jpeg",data:u})};
+    im.src=d}
+   else if(f.type==="application/pdf"){if(d.length>190000)no("PDF is too large (limit about 140 KB). Compress it or attach a screenshot instead.");else ok({name:f.name,type:f.type,data:d})}
+   else no("Only images and PDFs are supported.")};
+  r.readAsDataURL(f)})}
+function sha(s){return crypto.subtle.digest("SHA-256",new TextEncoder().encode("nb:"+s)).then(function(h){return Array.prototype.map.call(new Uint8Array(h),function(x){return x.toString(16).padStart(2,"0")}).join("")})}
+function unlocked(){if(window._ok)return true;try{return sessionStorage.getItem("nb-admin")==="1"}catch(e){return false}}
+function setUnlocked(v){window._ok=v;try{sessionStorage.setItem("nb-admin",v?"1":"0")}catch(e){}}
+function gate(app){
+  if(!cfgReady){app.appendChild(el("div",{class:"empty"},["Loading…"]));return}
+  var first=!adminCfg||!adminCfg.hash;
+  var p=el("input",{type:"password",placeholder:first?"Create admin password (min 6 characters)":"Admin password"});
+  var p2=first?el("input",{type:"password",placeholder:"Confirm password"}):"";
+  var msg=el("div",{class:"meta",style:"color:var(--red)"});
+  var f=el("form",{style:"max-width:380px;margin:40px auto"},[el("h3",{},[first?"Set up admin access":"🔒 Admin login"]),
+   el("div",{class:"meta"},[first?"Only staff who post notices need this. Students can view the Board and Notices without a password.":"Enter the password to post or manage notices."]),p,p2,msg,
+   el("button",{class:"btn pri",type:"submit"},[first?"Create password":"Unlock"])]);
+  f.onsubmit=function(ev){ev.preventDefault();var v=p.value;
+   if(first){if(v.length<6){msg.textContent="Use at least 6 characters.";return}if(v!==p2.value){msg.textContent="Passwords don’t match.";return}}
+   fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:v})})
+    .then(function(r){return r.json().then(function(j){return{ok:r.ok,j:j}})})
+    .then(function(r){if(r.ok){try{sessionStorage.setItem("nb-token",r.j.token)}catch(e){}window._tok=r.j.token;setUnlocked(true);render()}else msg.textContent="Wrong password."})
+    .catch(function(){msg.textContent="Server not reachable."})};
+  app.appendChild(f)}
+
+function card(n,tools){
+  var c=el("div",{class:"card"},[
+    el("span",{class:"chip"+(n.priority==="urgent"?" urgent":"")},[(n.priority==="urgent"?"URGENT · ":"")+n.category]),
+    el("h3",{},[n.title]),el("p",{},[n.body||""]),attach(n),
+    el("div",{class:"meta"},["Posted "+fmt(n.created)+(n.expires?" · Valid until "+n.expires:" · No expiry")+(active(n)?"":" · EXPIRED")])]);
+  if(tools)c.appendChild(tools);return c;
+}
+
+function notice(app){
+  var q=el("input",{placeholder:"Search notices…",value:filter.q});
+  var cat=el("select",{},["All"].concat(CATS).map(function(c){var o=el("option",{value:c},[c]);if(c===filter.cat)o.selected=true;return o}));
+  var out=el("div");
+  function draw(){
+    out.textContent="";
+    var l=sorted(notices.filter(active)).filter(function(n){
+      return (filter.cat==="All"||n.category===filter.cat)&&(!filter.q||(n.title+" "+n.body).toLowerCase().indexOf(filter.q.toLowerCase())>=0)});
+    if(!l.length)out.appendChild(el("div",{class:"empty"},["No notices found."]));
+    l.forEach(function(n){out.appendChild(card(n))});
+  }
+  q.oninput=function(){filter.q=q.value;draw()};cat.onchange=function(){filter.cat=cat.value;draw()};
+  app.appendChild(el("div",{class:"row"},[q,cat]));app.appendChild(out);draw();
+}
+
+function admin(app){
+  if(!unlocked())return gate(app);
+  app.appendChild(el("div",{class:"bar"},[el("span",{},["Signed in as admin"]),el("button",{class:"btn sm",onclick:function(){setUnlocked(false);render()}},["Log out"])]));
+  if(!usingDb)app.appendChild(el("div",{class:"note"},["Demo mode: notices are saved only in this browser. When opened as a published artifact, notices are stored in the shared database and update live on every screen."]));
+  if(!canWrite){app.appendChild(el("div",{class:"note"},["You have view-only access. Ask the owner for edit access to post notices."]))}
+  else{
+    var e=editing?notices.find(function(x){return x.id===editing}):null;
+    var t=el("input",{placeholder:"Title",required:"required",maxlength:"120",value:e?e.title:""});
+    var b=el("textarea",{placeholder:"Notice details",rows:"4",maxlength:"1500"});b.value=e?e.body:"";
+    var c=el("select",{},CATS.map(function(x){var o=el("option",{value:x},[x]);if(e&&e.category===x)o.selected=true;return o}));
+    var p=el("select",{},[["normal","Normal"],["urgent","Urgent"]].map(function(x){var o=el("option",{value:x[0]},[x[1]]);if(e&&e.priority===x[0])o.selected=true;return o}));
+    var x=el("input",{type:"date",value:e?e.expires:""});
+    pendingFile=e&&e.att?e.att:null;
+    var fs=el("div",{class:"meta"},[pendingFile?"Current: "+pendingFile.name:"No attachment"]);
+    var fi=el("input",{type:"file",accept:"image/*,application/pdf"});
+    fi.onchange=function(){var fl=fi.files[0];if(!fl)return;fs.textContent="Processing…";readFile(fl).then(function(a){pendingFile=a;fs.textContent="Attached: "+a.name+" ("+Math.round(a.data.length/1024)+" KB)"}).catch(function(m){pendingFile=e&&e.att?e.att:null;fi.value="";fs.textContent=m})};
+    var rm=el("button",{class:"btn sm",type:"button",onclick:function(){pendingFile=null;fi.value="";fs.textContent="No attachment"}},["Remove attachment"]);
+    var f=el("form",{},[el("h3",{},[e?"Edit notice":"Post a new notice"]),t,b,el("div",{class:"two"},[c,p]),
+      el("label",{class:"meta"},["Expiry date (optional): the notice disappears automatically after this day"]),x,
+      el("label",{class:"meta"},["Attachment (optional): an image or a small PDF. Images are shrunk automatically."]),fi,fs,rm,
+      el("div",{class:"tools"},[el("button",{class:"btn pri",type:"submit"},[e?"Save changes":"Publish"]),
+        e?el("button",{class:"btn",type:"button",onclick:function(){editing=null;render()}},["Cancel"]):""])]);
+    f.onsubmit=function(ev){ev.preventDefault();
+      var n=e?Object.assign({},e):{id:uid(),created:Date.now(),author:"Admin"};
+      n.title=t.value.trim();n.body=b.value.trim();n.category=c.value;n.priority=p.value;n.expires=x.value;if(pendingFile)n.att=pendingFile;else delete n.att;
+      if(!n.title)return;editing=null;saveNotice(n).then(function(){view="board";go("board")})};
+    app.appendChild(f);
+  }
+  app.appendChild(el("h3",{},["All notices ("+notices.length+")"]));
+  if(!notices.length&&canWrite)app.appendChild(el("button",{class:"btn",onclick:seed},["Add sample notices"]));
+  sorted(notices).forEach(function(n){
+    var tl=canWrite?el("div",{class:"tools"},[el("button",{class:"btn sm",onclick:function(){editing=n.id;render();window.scrollTo(0,0)}},["Edit"]),el("button",{class:"btn sm red",onclick:function(){removeNotice(n.id)}},["Delete"])]):null;
+    app.appendChild(card(n,tl));
+  });
+}
+
+function render(){
+  setNav();banner();
+  var app=document.getElementById("app");app.textContent="";
+  if(view==="notices")notice(app);else if(view==="admin")admin(app);else board(app);
+}
+
+/* ---------- boot ---------- */
+window.addEventListener("hashchange",function(){var v=(location.hash||"#board").slice(1);if(["board","notices","admin"].indexOf(v)>=0&&v!==view){view=v;render()}});
+setInterval(function(){if(view==="board"){var l=notices.filter(active).length;if(l>1){idx=(idx+1)%l;render()}else tick()}},8000);
+setInterval(tick,30000);
+// midnight expiry refresh
+setInterval(function(){if(view!=="admin")render()},600000);
+
+lsLoad();try{adminCfg=JSON.parse(localStorage.getItem(LSK+"-pw")||"null")}catch(e){}cfgReady=true;render();
+try{
+  Promise.all([window.claude?window.claude.use("db"):null,window.claude?window.claude.use("user"):null]).then(function(r){
+    if(!r[0])return;db=r[0];usingDb=true;notices=[];cfgReady=false;adminCfg=null;
+    db.doc("config/admin").onSnapshot(function(s){adminCfg=s.exists?s.data():null;cfgReady=true;render()},function(){cfgReady=true;render()});
+    if(r[1]){var w=r[1].can("data.write");if(w===false)canWrite=false}
+    db.collection("notices").onSnapshot(function(s){notices=s.docs.map(function(d){return Object.assign({id:d.id},d.data())});render()},function(){usingDb=false;lsLoad();render()});
+  }).catch(function(){});
+}catch(e){}
+})();
+</script>
+</body>
+</html>
