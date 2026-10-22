@@ -182,6 +182,30 @@ function card(n,tools){
   if(tools)c.appendChild(tools);return c;
 }
 
+function pushCard(){
+  var box=el("div",{class:"card"}),st=el("div",{class:"meta"});
+  box.appendChild(el("h3",{},["\uD83D\uDD14 Get notified"]));
+  if(!("serviceWorker" in navigator&&"PushManager" in window&&"Notification" in window)){
+    box.appendChild(el("p",{},["This browser doesn\u2019t support notifications. On iPhone, add this site to your Home Screen and open it from there."]));return box}
+  var checks=[],list=el("div",{style:"display:flex;flex-wrap:wrap;gap:10px;margin:10px 0"});
+  ["All"].concat(CATS).forEach(function(c){var cb=el("input",{type:"checkbox",value:c,style:"width:auto"});if(c==="All")cb.checked=true;checks.push(cb);list.appendChild(el("label",{style:"display:flex;gap:6px;align-items:center"},[cb,c]))});
+  var btn=el("button",{class:"btn pri"},["Enable notifications"]),off=el("button",{class:"btn",style:"display:none"},["Turn off"]);
+  function sel(){var s=checks.filter(function(c){return c.checked}).map(function(c){return c.value});return s.indexOf("All")>=0?["All"]:s}
+  function u8(b){var p="=".repeat((4-b.length%4)%4),r=atob((b+p).replace(/-/g,"+").replace(/_/g,"/")),o=new Uint8Array(r.length);for(var i=0;i<r.length;i++)o[i]=r.charCodeAt(i);return o}
+  function show(on){btn.textContent=on?"Update categories":"Enable notifications";off.style.display=on?"":"none";if(on)st.textContent="Notifications are ON for this device."}
+  navigator.serviceWorker.register("/sw.js").then(function(){return navigator.serviceWorker.ready}).then(function(r){return r.pushManager.getSubscription()}).then(function(s){show(!!s)}).catch(function(){});
+  btn.onclick=function(){var cats=sel();if(!cats.length){st.textContent="Pick at least one category.";return}
+    st.textContent="Working\u2026";
+    Notification.requestPermission().then(function(p){if(p!=="granted")throw new Error("Permission denied. Allow notifications for this site in your browser settings.");return navigator.serviceWorker.register("/sw.js")})
+    .then(function(){return navigator.serviceWorker.ready})
+    .then(function(reg){return fetch("/api/push/key").then(function(r){return r.json()}).then(function(k){return reg.pushManager.getSubscription().then(function(s){return s||reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:u8(k.key)})})})})
+    .then(function(sub){return fetch("/api/push/subscribe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({subscription:sub,cats:cats})})})
+    .then(function(r){if(!r.ok)throw new Error("Server error. Try again.");show(true);st.textContent="Done! You will get alerts for: "+cats.join(", ")})
+    .catch(function(e){st.textContent=e.message||"Could not enable notifications."})};
+  off.onclick=function(){navigator.serviceWorker.ready.then(function(reg){return reg.pushManager.getSubscription()}).then(function(s){if(!s)return;fetch("/api/push/unsubscribe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({endpoint:s.endpoint})});return s.unsubscribe()}).then(function(){show(false);st.textContent="Notifications turned off."})};
+  box.appendChild(el("p",{},["Choose what you want alerts for. You will get a pop-up on this device when a new notice is posted."]));
+  box.appendChild(list);box.appendChild(el("div",{class:"tools"},[btn,off]));box.appendChild(st);return box}
+
 function notice(app){
   var q=el("input",{placeholder:"Search notices…",value:filter.q});
   var cat=el("select",{},["All"].concat(CATS).map(function(c){var o=el("option",{value:c},[c]);if(c===filter.cat)o.selected=true;return o}));
@@ -194,6 +218,7 @@ function notice(app){
     l.forEach(function(n){out.appendChild(card(n))});
   }
   q.oninput=function(){filter.q=q.value;draw()};cat.onchange=function(){filter.cat=cat.value;draw()};
+  app.appendChild(pushCard());
   app.appendChild(el("div",{class:"row"},[q,cat]));app.appendChild(out);draw();
 }
 
