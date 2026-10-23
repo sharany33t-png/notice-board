@@ -41,6 +41,9 @@ form .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .empty{text-align:center;color:var(--mute);padding:40px 0}
 .tools{display:flex;gap:6px;margin-top:8px}
 body.kiosk header,body.kiosk .bar{display:none}
+.mm{max-width:100%;max-height:62vh;object-fit:contain;display:block;margin:0 auto;border-radius:10px;background:#fff}
+body.kiosk .mm{max-height:80vh}
+.stage.media{min-height:0}.stage.media h2{font-size:clamp(20px,2.6vw,36px)}.stage.media p{font-size:clamp(15px,1.8vw,22px)}
 </style>
 </head>
 <body>
@@ -59,7 +62,7 @@ function chk(r){if(r.status===401){try{sessionStorage.setItem("nb-admin","0")}ca
 var DB={
  collection:function(){return{
   onSnapshot:function(next,err){
-   function load(){fetch("/api/notices").then(function(r){return r.json()}).then(function(l){next({docs:l.map(function(n){return{id:n.id,data:function(){return n}}})})}).catch(function(){})}
+   var last="";function load(){fetch("/api/notices").then(function(r){return r.json()}).then(function(l){var j=JSON.stringify(l);if(j===last)return;last=j;next({docs:l.map(function(n){return{id:n.id,data:function(){return n}}})})}).catch(function(){})}
    load();try{var es=new EventSource("/api/stream");es.onmessage=load}catch(e){setInterval(load,10000)}setInterval(load,60000)},
   doc:function(id){return{
    set:function(d){return fetch("/api/notices/"+encodeURIComponent(id),{method:"PUT",headers:hdr(),body:JSON.stringify(d)}).then(chk)},
@@ -77,7 +80,7 @@ window.claude={use:function(n){
 (function(){
 var CATS=["General","Civil","Mech","Mett","Exams","Events","Placements","Sports","Holidays"];
 var LSK="notice-board-demo-v1";
-var notices=[],view=(location.hash||"#board").slice(1),idx=0,db=null,canWrite=true,filter={q:"",cat:"All"},editing=null,usingDb=false,adminCfg=null,cfgReady=false,pendingFile=null;
+var notices=[],view=(location.hash||"#board").slice(1),idx=0,db=null,canWrite=true,filter={q:"",cat:"All"},editing=null,usingDb=false,adminCfg=null,cfgReady=false,pendingFile=null,formDirty=false,pageIdx=0;
 
 function el(t,a,k){var e=document.createElement(t);a=a||{};for(var x in a){if(x==="class")e.className=a[x];else if(x==="onclick")e.onclick=a[x];else e.setAttribute(x,a[x]);}(k||[]).forEach(function(c){e.appendChild(typeof c==="string"?document.createTextNode(c):c)});return e}
 function today(){var d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0")}
@@ -90,7 +93,7 @@ function uid(){return "n"+Date.now().toString(36)+Math.random().toString(36).sli
 function lsLoad(){try{notices=JSON.parse(localStorage.getItem(LSK)||"[]")}catch(e){notices=[]}}
 function lsSave(){try{localStorage.setItem(LSK,JSON.stringify(notices))}catch(e){}}
 function saveNotice(n){
-  if(usingDb){return db.collection("notices").doc(n.id).set(n).catch(function(){alert("Could not save. You may not have permission to edit.")})}
+  if(usingDb){return db.collection("notices").doc(n.id).set(n).catch(function(){alert("Could not save. Check your connection and log in again if needed.");return false})}
   var i=notices.findIndex(function(x){return x.id===n.id});if(i>=0)notices[i]=n;else notices.push(n);lsSave();render();return Promise.resolve();
 }
 function removeNotice(id){
@@ -113,7 +116,7 @@ function setNav(){
   [["board","Board"],["notices","Notices"],["admin","Admin"]].forEach(function(p){
     nav.appendChild(el("button",{class:view===p[0]?"on":"",onclick:function(){go(p[0])}},[p[1]]))});
 }
-function go(v){view=v;location.hash=v;idx=0;document.body.classList.remove("kiosk");render()}
+function go(v){view=v;location.hash=v;idx=0;lastKey="";formDirty=false;document.body.classList.remove("kiosk");render()}
 
 function banner(){
   var b=document.getElementById("banner");b.textContent="";
@@ -129,9 +132,9 @@ function board(app){
   app.appendChild(bar);
   if(!list.length){app.appendChild(el("div",{class:"stage"},[el("h2",{},["No active notices"]),el("p",{},["New announcements will appear here instantly."])]));return}
   if(idx>=list.length)idx=0;var n=list[idx];
-  var st=el("div",{class:"stage"},[
+  var st=el("div",{class:"stage"+(n.att?" media":"")},[
     el("span",{class:"chip"+(n.priority==="urgent"?" urgent":"")},[(n.priority==="urgent"?"URGENT · ":"")+n.category]),
-    el("h2",{},[n.title]),el("p",{},[n.body||""]),attach(n),
+    el("h2",{},[n.title]),el("p",{},[n.body||""]),boardMedia(n),
     el("div",{class:"meta"},["Posted "+fmt(n.created)+(n.expires?" · Valid until "+n.expires:"")])]);
   app.appendChild(st);
   var d=el("div",{class:"dots"});list.forEach(function(_,i){d.appendChild(el("i",{class:i===idx?"on":""}))});app.appendChild(d);
@@ -139,9 +142,46 @@ function board(app){
 }
 function tick(){var c=document.getElementById("clock");if(c)c.textContent=new Date().toLocaleString(undefined,{weekday:"long",day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"})}
 
-function attach(n){var a=n.att;if(!a)return "";
+function isPages(a){return !!a&&a.kind==="pages"}
+function mediaUrl(n,i){return "/api/media/"+encodeURIComponent(n.id)+"/"+n.att.v+"/"+i}
+function apiTok(){return window._tok||(function(){try{return sessionStorage.getItem("nb-token")||""}catch(e){return ""}})()}
+function attach(n,mode){var a=n.att;if(!a)return "";
+  if(isPages(a)){
+    if(mode==="admin")return el("div",{class:"meta"},[el("img",{src:mediaUrl(n,0),alt:a.name,loading:"lazy",style:"max-height:120px;max-width:100%;border-radius:8px;display:block;margin:6px 0"}),"\uD83D\uDCCE "+a.name+" \u00B7 "+a.count+(a.count>1?" pages":" page")]);
+    var box=el("div",{style:"display:grid;gap:10px;margin:10px 0"});
+    for(var i=0;i<a.count;i++)box.appendChild(el("a",{href:mediaUrl(n,i),target:"_blank",rel:"noopener"},[el("img",{src:mediaUrl(n,i),alt:a.name+" page "+(i+1),loading:"lazy",style:"width:100%;height:auto;border-radius:10px;border:1px solid var(--line);background:#fff;display:block"})]));
+    return box}
   if(a.type.indexOf("image/")===0)return el("img",{src:a.data,alt:a.name,style:"max-width:100%;max-height:40vh;border-radius:12px;object-fit:contain;align-self:flex-start;margin:8px 0"});
-  return el("button",{class:"btn sm",style:"align-self:flex-start;margin:8px 0",onclick:function(){saveFile(a)}},["📎 "+a.name+" (download)"])}
+  return el("button",{class:"btn sm",style:"align-self:flex-start;margin:8px 0",onclick:function(){saveFile(a)}},["\uD83D\uDCCE "+a.name+" (download)"])}
+function boardMedia(n){var a=n.att;if(!a)return "";
+  if(isPages(a)){var pg=Math.min(pageIdx,a.count-1);
+    var w=el("div",{style:"display:flex;flex-direction:column;align-items:center;gap:8px"},[el("img",{class:"mm",src:mediaUrl(n,pg),alt:a.name})]);
+    if(a.count>1)w.appendChild(el("div",{class:"meta"},["Page "+(pg+1)+" of "+a.count]));
+    for(var i=0;i<a.count;i++){var im=new Image();im.src=mediaUrl(n,i)}
+    return w}
+  if(a.type&&a.type.indexOf("image/")===0)return el("img",{class:"mm",src:a.data,alt:a.name});
+  return attach(n,"board")}
+function loadPdfJs(){return window.pdfjsLib?Promise.resolve():new Promise(function(ok,no){var s=document.createElement("script");s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+  s.onload=function(){pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";ok()};
+  s.onerror=function(){no(new Error("Could not load the PDF reader. Check your internet connection."))};document.head.appendChild(s)})}
+function toJpeg(cv){var q=0.8,u=cv.toDataURL("image/jpeg",q);while(u.length>880000&&q>0.35){q-=0.1;u=cv.toDataURL("image/jpeg",q)}
+  if(u.length>880000)throw new Error("An image or page is too detailed to store. Try a simpler or smaller file.");return u}
+function prepFile(f,prog){
+  if(f.size>15*1024*1024)return Promise.reject(new Error("File is too large (maximum 15 MB)."));
+  if(f.type.indexOf("image/")===0)return new Promise(function(ok,no){var r=new FileReader();r.onerror=function(){no(new Error("Could not read the file."))};
+    r.onload=function(){var im=new Image();im.onerror=function(){no(new Error("Unsupported image."))};
+      im.onload=function(){var s=Math.min(1,1600/Math.max(im.width,im.height)),c=document.createElement("canvas");c.width=Math.round(im.width*s);c.height=Math.round(im.height*s);
+        var x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);
+        try{ok({name:f.name,pages:[toJpeg(c)],isNew:true})}catch(e){no(e)}};
+      im.src=r.result};r.readAsDataURL(f)});
+  if(f.type==="application/pdf")return loadPdfJs().then(function(){return f.arrayBuffer()}).then(function(buf){return pdfjsLib.getDocument({data:buf}).promise}).then(function(pdf){
+    var n=Math.min(pdf.numPages,20),out=[],p=Promise.resolve();
+    function one(i){return pdf.getPage(i).then(function(pg){var v=pg.getViewport({scale:1}),sc=Math.min(3,1600/Math.max(v.width,v.height)),vp=pg.getViewport({scale:sc}),c=document.createElement("canvas");
+      c.width=Math.round(vp.width);c.height=Math.round(vp.height);var x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height);
+      return pg.render({canvasContext:x,viewport:vp}).promise.then(function(){out.push(toJpeg(c));prog("Reading PDF page "+i+" of "+n+"\u2026")})})}
+    for(var i=1;i<=n;i++)(function(k){p=p.then(function(){return one(k)})})(i);
+    return p.then(function(){return{name:f.name,pages:out,isNew:true,note:pdf.numPages>20?" (only the first 20 pages are used)":""}})});
+  return Promise.reject(new Error("Only images and PDFs are supported."))}
 function saveFile(a){try{var s=atob(a.data.split(",")[1]),u=new Uint8Array(s.length);for(var i=0;i<s.length;i++)u[i]=s.charCodeAt(i);var blob=new Blob([u],{type:a.type});
   window.claude.use("downloads").then(function(d){if(d)d.save({filename:a.name,data:blob}).catch(function(){});else alert("Download isn’t available in this view.")})}catch(e){alert("Could not open the file.")}}
 function readFile(f){return new Promise(function(ok,no){var r=new FileReader();r.onerror=function(){no("Could not read the file.")};
@@ -177,7 +217,7 @@ function gate(app){
 function card(n,tools){
   var c=el("div",{class:"card"},[
     el("span",{class:"chip"+(n.priority==="urgent"?" urgent":"")},[(n.priority==="urgent"?"URGENT · ":"")+n.category]),
-    el("h3",{},[n.title]),el("p",{},[n.body||""]),attach(n),
+    el("h3",{},[n.title]),el("p",{},[n.body||""]),attach(n,tools?"admin":"card"),
     el("div",{class:"meta"},["Posted "+fmt(n.created)+(n.expires?" · Valid until "+n.expires:" · No expiry")+(active(n)?"":" · EXPIRED")])]);
   if(tools)c.appendChild(tools);return c;
 }
@@ -224,6 +264,7 @@ function notice(app){
 
 function admin(app){
   if(!unlocked())return gate(app);
+  formDirty=false;
   app.appendChild(el("div",{class:"bar"},[el("span",{},["Signed in as admin"]),el("button",{class:"btn sm",onclick:function(){setUnlocked(false);render()}},["Log out"])]));
   if(!usingDb)app.appendChild(el("div",{class:"note"},["Demo mode: notices are saved only in this browser. When opened as a published artifact, notices are stored in the shared database and update live on every screen."]));
   if(!canWrite){app.appendChild(el("div",{class:"note"},["You have view-only access. Ask the owner for edit access to post notices."]))}
@@ -234,20 +275,34 @@ function admin(app){
     var c=el("select",{},CATS.map(function(x){var o=el("option",{value:x},[x]);if(e&&e.category===x)o.selected=true;return o}));
     var p=el("select",{},[["normal","Normal"],["urgent","Urgent"]].map(function(x){var o=el("option",{value:x[0]},[x[1]]);if(e&&e.priority===x[0])o.selected=true;return o}));
     var x=el("input",{type:"date",value:e?e.expires:""});
+    var du=el("select",{},[3,5,8,10,15,20,30,45,60].map(function(s){var o=el("option",{value:String(s)},[s+" seconds"]);if(((e&&e.duration)||8)===s)o.selected=true;return o}));
     pendingFile=e&&e.att?e.att:null;
     var fs=el("div",{class:"meta"},[pendingFile?"Current: "+pendingFile.name:"No attachment"]);
     var fi=el("input",{type:"file",accept:"image/*,application/pdf"});
-    fi.onchange=function(){var fl=fi.files[0];if(!fl)return;fs.textContent="Processing…";readFile(fl).then(function(a){pendingFile=a;fs.textContent="Attached: "+a.name+" ("+Math.round(a.data.length/1024)+" KB)"}).catch(function(m){pendingFile=e&&e.att?e.att:null;fi.value="";fs.textContent=m})};
+    fi.onchange=function(){var fl=fi.files[0];if(!fl)return;fs.textContent="Processing\u2026";prepFile(fl,function(m){fs.textContent=m}).then(function(a){pendingFile=a;fs.textContent="Ready: "+a.name+" ("+a.pages.length+(a.pages.length>1?" pages":" page")+")"+(a.note||"")+". It will upload when you press Publish."}).catch(function(m){pendingFile=e&&e.att?e.att:null;fi.value="";fs.textContent=(m&&m.message)||String(m)})};
     var rm=el("button",{class:"btn sm",type:"button",onclick:function(){pendingFile=null;fi.value="";fs.textContent="No attachment"}},["Remove attachment"]);
     var f=el("form",{},[el("h3",{},[e?"Edit notice":"Post a new notice"]),t,b,el("div",{class:"two"},[c,p]),
       el("label",{class:"meta"},["Expiry date (optional): the notice disappears automatically after this day"]),x,
-      el("label",{class:"meta"},["Attachment (optional): an image or a small PDF. Images are shrunk automatically."]),fi,fs,rm,
+      el("label",{class:"meta"},["How long this notice stays on the Board (for a PDF: how long each page stays)"]),du,
+      el("label",{class:"meta"},["Attachment (optional): an image or a PDF (up to 20 pages). It is shown large and readable on the Board, and PDF pages play as a slideshow."]),fi,fs,rm,
       el("div",{class:"tools"},[el("button",{class:"btn pri",type:"submit"},[e?"Save changes":"Publish"]),
         e?el("button",{class:"btn",type:"button",onclick:function(){editing=null;render()}},["Cancel"]):""])]);
+    f.oninput=f.onchange=function(){formDirty=true};
     f.onsubmit=function(ev){ev.preventDefault();
       var n=e?Object.assign({},e):{id:uid(),created:Date.now(),author:"Admin"};
-      n.title=t.value.trim();n.body=b.value.trim();n.category=c.value;n.priority=p.value;n.expires=x.value;if(pendingFile)n.att=pendingFile;else delete n.att;
-      if(!n.title)return;editing=null;saveNotice(n).then(function(){view="board";go("board")})};
+      n.title=t.value.trim();n.body=b.value.trim();n.category=c.value;n.priority=p.value;n.expires=x.value;n.duration=Number(du.value)||8;
+      if(!n.title)return;
+      var sb=f.querySelector("button[type=submit]");sb.disabled=true;
+      var done=function(ok){sb.disabled=false;if(ok===false)return;editing=null;formDirty=false;go("board")};
+      var finish=function(){return saveNotice(n).then(done)};
+      if(pendingFile&&pendingFile.isNew){
+        var v=Date.now(),pf=pendingFile,i=0;
+        var up=function(){if(i>=pf.pages.length)return Promise.resolve();fs.textContent="Uploading page "+(i+1)+" of "+pf.pages.length+"\u2026";
+          return fetch("/api/notices/"+encodeURIComponent(n.id)+"/media/"+v+"/"+i,{method:"POST",headers:{"Content-Type":"application/json","x-token":apiTok()},body:JSON.stringify({data:pf.pages[i]})})
+            .then(function(r){if(!r.ok)throw new Error(r.status===401?"Session expired. Please log in again.":"Upload failed. Try again.");i++;return up()})};
+        up().then(function(){n.att={name:pf.name,kind:"pages",v:v,count:pf.pages.length};return finish()})
+          .catch(function(err){sb.disabled=false;fs.textContent=err.message||"Upload failed."});
+      }else{if(pendingFile)n.att=pendingFile;else delete n.att;finish()}};
     app.appendChild(f);
   }
   app.appendChild(el("h3",{},["All notices ("+notices.length+")"]));
@@ -258,6 +313,7 @@ function admin(app){
   });
 }
 
+function refresh(){if(view==="admin"&&formDirty)return;render()}
 function render(){
   setNav();banner();
   var app=document.getElementById("app");app.textContent="";
@@ -265,8 +321,17 @@ function render(){
 }
 
 /* ---------- boot ---------- */
-window.addEventListener("hashchange",function(){var v=(location.hash||"#board").slice(1);if(["board","notices","admin"].indexOf(v)>=0&&v!==view){view=v;render()}});
-setInterval(function(){if(view==="board"){var l=notices.filter(active).length;if(l>1){idx=(idx+1)%l;render()}else tick()}},8000);
+window.addEventListener("hashchange",function(){var v=(location.hash||"#board").slice(1);if(["board","notices","admin"].indexOf(v)>=0&&v!==view){view=v;formDirty=false;render()}});
+var shownAt=Date.now(),lastKey="";
+setInterval(function(){
+  if(view!=="board")return;
+  var l=sorted(notices.filter(active));if(!l.length)return;
+  if(idx>=l.length)idx=0;
+  var n=l[idx];if(n.id!==lastKey){lastKey=n.id;shownAt=Date.now();pageIdx=0}
+  var d=Math.max(3,Math.min(120,Number(n.duration)||8)),pc=isPages(n.att)?Math.max(1,n.att.count):1,el_=Date.now()-shownAt;
+  if(l.length>1&&el_>=d*pc*1000){idx=(idx+1)%l.length;pageIdx=0;render();return}
+  if(pc>1){var np=Math.floor(el_/(d*1000))%pc;if(np!==pageIdx){pageIdx=np;render()}}
+},500);
 setInterval(tick,30000);
 // midnight expiry refresh
 setInterval(function(){if(view!=="admin")render()},600000);
@@ -277,7 +342,7 @@ try{
     if(!r[0])return;db=r[0];usingDb=true;notices=[];cfgReady=false;adminCfg=null;
     db.doc("config/admin").onSnapshot(function(s){adminCfg=s.exists?s.data():null;cfgReady=true;render()},function(){cfgReady=true;render()});
     if(r[1]){var w=r[1].can("data.write");if(w===false)canWrite=false}
-    db.collection("notices").onSnapshot(function(s){notices=s.docs.map(function(d){return Object.assign({id:d.id},d.data())});render()},function(){usingDb=false;lsLoad();render()});
+    db.collection("notices").onSnapshot(function(s){notices=s.docs.map(function(d){return Object.assign({id:d.id},d.data())});refresh()},function(){usingDb=false;lsLoad();render()});
   }).catch(function(){});
 }catch(e){}
 })();

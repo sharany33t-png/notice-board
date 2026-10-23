@@ -71,6 +71,35 @@ function notifyAll(n) {
   });
 }
 
+
+// ---- media (images and PDF pages stored as JPEG pages) ----
+const MEDIA_DIR = path.join(process.env.DATA_DIR || __dirname, "media");
+const mediaCache = new Map();
+const mkey = (nid, v, i) => `${nid}-${v}-${i}`.replace(/[^A-Za-z0-9_-]/g, "_");
+async function mediaSave(k, data) {
+  mediaCache.set(k, data);
+  if (mediaCache.size > 60) mediaCache.delete(mediaCache.keys().next().value);
+  if (col) return admin.firestore().collection("media").doc(k).set({ data });
+  fs.mkdirSync(MEDIA_DIR, { recursive: true });
+  fs.writeFileSync(path.join(MEDIA_DIR, k), data);
+}
+async function mediaGet(k) {
+  if (mediaCache.has(k)) return mediaCache.get(k);
+  let d = null;
+  if (col) { const s = await admin.firestore().collection("media").doc(k).get(); d = s.exists ? s.data().data : null; }
+  else { try { d = fs.readFileSync(path.join(MEDIA_DIR, k), "utf8"); } catch (e) {} }
+  if (d) { mediaCache.set(k, d); if (mediaCache.size > 60) mediaCache.delete(mediaCache.keys().next().value); }
+  return d;
+}
+async function mediaDrop(att, nid) {
+  if (!att || att.kind !== "pages") return;
+  for (let i = 0; i < att.count; i++) {
+    const k = mkey(nid, att.v, i);
+    mediaCache.delete(k);
+    try { if (col) await admin.firestore().collection("media").doc(k).delete(); else fs.unlinkSync(path.join(MEDIA_DIR, k)); } catch (e) {}
+  }
+}
+
 const tokens = new Set();
 const clients = new Set();
 const broadcast = () => clients.forEach(res => res.write("data: update\n\n"));
@@ -129,6 +158,23 @@ app.post("/api/push/unsubscribe", async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/notices/:id/media/:v/:i", auth, async (req, res) => {
+  const i = Number(req.params.i), v = Number(req.params.v), d = (req.body || {}).data;
+  if (!Number.isInteger(i) || i < 0 || i >= 20 || !Number.isFinite(v) || typeof d !== "string" ||
+      !d.startsWith("data:image/jpeg;base64,") || d.length > 900000) return res.status(400).json({ error: "bad media" });
+  try { await mediaSave(mkey(req.params.id, v, i), d.slice(23)); res.json({ ok: true }); }
+  catch (e) { console.error(e.message); res.status(500).json({ error: "save failed" }); }
+});
+
+app.get("/api/media/:id/:v/:i", async (req, res) => {
+  try {
+    const d = await mediaGet(mkey(req.params.id, Number(req.params.v), Number(req.params.i)));
+    if (!d) return res.status(404).end();
+    res.set({ "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=31536000, immutable" });
+    res.send(Buffer.from(d, "base64"));
+  } catch (e) { res.status(500).end(); }
+});
+
 app.put("/api/notices/:id", auth, async (req, res) => {
   const b = req.body || {};
   const n = {
@@ -140,9 +186,12 @@ app.put("/api/notices/:id", auth, async (req, res) => {
     expires: String(b.expires || "").slice(0, 10),
     created: Number(b.created) || Date.now(),
     author: "Admin",
+    duration: Math.max(3, Math.min(120, Number(b.duration) || 8)),
   };
   if (!n.title) return res.status(400).json({ error: "title required" });
-  if (b.att && typeof b.att.data === "string" && b.att.data.length < 400000) {
+  if (b.att && b.att.kind === "pages" && Number.isFinite(Number(b.att.v))) {
+    n.att = { name: String(b.att.name).slice(0, 100), kind: "pages", v: Number(b.att.v), count: Math.min(20, Math.max(1, Math.floor(Number(b.att.count)) || 1)) };
+  } else if (b.att && typeof b.att.data === "string" && b.att.data.length < 400000) {
     n.att = { name: String(b.att.name).slice(0, 100), type: String(b.att.type).slice(0, 50), data: b.att.data };
   }
   const i = notices.findIndex(x => x.id === n.id);
@@ -154,12 +203,15 @@ app.put("/api/notices/:id", auth, async (req, res) => {
     return res.status(500).json({ error: "save failed" });
   }
   broadcast();
+  if (prev && prev.att && prev.att.kind === "pages" && (!n.att || n.att.v !== prev.att.v)) mediaDrop(prev.att, n.id);
   if (!prev && (!n.expires || n.expires >= new Date().toISOString().slice(0, 10))) notifyAll(n);
   res.json(n);
 });
 
 app.delete("/api/notices/:id", auth, async (req, res) => {
+  const old = notices.find(x => x.id === req.params.id);
   notices = notices.filter(x => x.id !== req.params.id);
+  if (old) mediaDrop(old.att, old.id);
   try { await removeOne(req.params.id); } catch (e) { console.error(e.message); return res.status(500).json({ error: "delete failed" }); }
   broadcast();
   res.json({ ok: true });
